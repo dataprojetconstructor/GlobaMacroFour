@@ -12,7 +12,7 @@ st.markdown("""
     <style>
     .main { background-color: #0e1117; color: #ffffff; }
     .stMetric { background-color: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 15px; }
-    .opp-card { background-color: #1c2128; border-radius: 12px; padding: 25px; margin-bottom: 20px; border-left: 5px solid #58a6ff; border: 1px solid #30363d; }
+    .opp-card { background-color: #1c2128; border: 1px solid #30363d; border-radius: 12px; padding: 25px; margin-bottom: 20px; border-left: 5px solid #58a6ff; }
     .logic-box { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; margin-top: 10px; border-radius: 6px; color: #c9d1d9; font-size: 0.95em; }
     .hawk-tag { color: #238636; font-weight: bold; background: #23863622; padding: 4px 12px; border-radius: 20px; border: 1px solid #238636; }
     h1, h2, h3 { color: #f0f6fc; font-family: 'Inter', sans-serif; }
@@ -27,62 +27,67 @@ except:
     st.error("Erreur API FRED")
     st.stop()
 
-# --- CODES SÉRIES G10 (VÉRIFIÉS ET ROBUSTES) ---
+# --- CODES SÉRIES G10 (TESTÉS UN PAR UN SUR FRED) ---
+# GDP : Real GDP Index (2015=100) pour l'homogénéité
+# Debt : Credit to non-financial sector (% of GDP)
 central_banks = {
     'USD (Fed)': {'rate': 'FEDFUNDS', 'cpi': 'CPIAUCSL', 'liq': 'WALCL', 'gdp': 'GDPC1', 'debt': 'GFDEGDQ188S', 'symbol': 'USD'},
-    'EUR (ECB)': {'rate': 'ECBDFR', 'cpi': 'CP0000EZ19M086NEST', 'liq': 'ECBASSETSW', 'gdp': 'CLVMEURSCAB1GQEU19', 'debt': 'DEBTTG7ZZA188S', 'symbol': 'EUR'},
-    'JPY (BoJ)': {'rate': 'IRSTCI01JPM156N', 'cpi': 'JPNCPIALLMINMEI', 'liq': 'JPNASSETS', 'gdp': 'JPNNGDP', 'debt': 'DEBTTGJPZA188S', 'symbol': 'JPY'},
-    'GBP (BoE)': {'rate': 'IUDSOIA', 'cpi': 'GBRCPIALLMINMEI', 'liq': 'MANMM101GBM189S', 'gdp': 'UKNGDP', 'debt': 'DEBTTGGBZA188S', 'symbol': 'GBP'},
-    'CAD (BoC)': {'rate': 'IRSTCI01CAM156N', 'cpi': 'CANCPIALLMINMEI', 'liq': 'MANMM101CAM189S', 'gdp': 'CANGDP', 'debt': 'DEBTTGCAZA188S', 'symbol': 'CAD'},
-    'AUD (RBA)': {'rate': 'IRSTCI01AUM156N', 'cpi': 'AUSCPIALLMINMEI', 'liq': 'MANMM101AUM189S', 'gdp': 'AUSGDP', 'debt': 'DEBTTGAUZA188S', 'symbol': 'AUD'},
-    'CHF (SNB)': {'rate': 'IRSTCI01CHM156N', 'cpi': 'CHECPIALLMINMEI', 'liq': 'MABMM301CHM189S', 'gdp': 'CHNGDP', 'debt': 'DEBTTGCHZA188S', 'symbol': 'CHF'},
+    'EUR (ECB)': {'rate': 'ECBDFR', 'cpi': 'CP0000EZ19M086NEST', 'liq': 'ECBASSETSW', 'gdp': 'NGDPRSAXDCYU', 'debt': 'DEBTTG7ZZA188S', 'symbol': 'EUR'},
+    'JPY (BoJ)': {'rate': 'IRSTCI01JPM156N', 'cpi': 'JPNCPIALLMINMEI', 'liq': 'JPNASSETS', 'gdp': 'JPNRGDPXP', 'debt': 'DEBTTGJPZA188S', 'symbol': 'JPY'},
+    'GBP (BoE)': {'rate': 'IUDSOIA', 'cpi': 'GBRCPIALLMINMEI', 'liq': 'MANMM101GBM189S', 'gdp': 'NGDPRSAXDCGB', 'debt': 'DEBTTGGBZA188S', 'symbol': 'GBP'},
+    'CAD (BoC)': {'rate': 'IRSTCI01CAM156N', 'cpi': 'CANCPIALLMINMEI', 'liq': 'MANMM101CAM189S', 'gdp': 'NGDPRSAXDCCA', 'debt': 'DEBTTGCAZA188S', 'symbol': 'CAD'},
+    'AUD (RBA)': {'rate': 'IRSTCI01AUM156N', 'cpi': 'CPALTT01AUQ657N', 'liq': 'MANMM101AUM189S', 'gdp': 'NGDPRSAXDCAU', 'debt': 'DEBTTGAUZA188S', 'symbol': 'AUD'},
+    'CHF (SNB)': {'rate': 'IRSTCI01CHM156N', 'cpi': 'CHECPIALLMINMEI', 'liq': 'MABMM301CHM189S', 'gdp': 'NGDPRSAXDCCH', 'debt': 'DEBTTGCHZA188S', 'symbol': 'CHF'},
 }
 
 def calculate_z_score(series):
-    if series is None or len(series.dropna()) < 5: return 0.0
+    if series is None or len(series.dropna()) < 3: return None
     clean = series.ffill().dropna()
     return (clean.iloc[-1] - clean.mean()) / clean.std()
 
 @st.cache_data(ttl=86400)
-def fetch_macro_universe():
-    data_list = []
-    # On remonte à 15 ans pour bien calculer les moyennes de dette
+def fetch_macro_data():
+    data = []
+    # On remonte à 15 ans pour les cycles de dette
     start_date = datetime.now() - timedelta(days=365*15)
     
     for currency, codes in central_banks.items():
-        row = {'Devise': currency, 'Symbol': codes['symbol'], 'Taux (%)': 0, 
-               'Z-Rate': 0, 'Z-CPI': 0, 'Z-Liq': 0, 'Z-PIB': 0, 'Z-Debt': 0, 'Score': 0}
+        row = {'Devise': currency, 'Symbol': codes['symbol'], 'Taux (%)': 0, 'Z-Rate': 0, 'Z-CPI': 0, 'Z-Liq': 0, 'Z-PIB': 0, 'Z-Debt': 0, 'Score': 0}
         try:
-            # 1. Taux
+            # 1. Taux (Mensuel)
             r = fred.get_series(codes['rate'], observation_start=start_date).ffill()
             row['Taux (%)'] = r.iloc[-1]
-            row['Z-Rate'] = calculate_z_score(r)
+            row['Z-Rate'] = calculate_z_score(r) or 0
             
-            # 2. Inflation
+            # 2. Inflation (Mensuelle ou Trimestrielle)
             c = fred.get_series(codes['cpi'], observation_start=start_date).ffill()
-            row['Z-CPI'] = calculate_z_score(c.pct_change(12))
+            # Si trimestriel (AUD), variation sur 4 périodes, sinon 12
+            shift = 4 if "Q" in codes['cpi'] or currency == 'AUD (RBA)' else 12
+            row['Z-CPI'] = calculate_z_score(c.pct_change(shift)) or 0
             
-            # 3. Liquidité
+            # 3. Liquidité (Mensuelle)
             l = fred.get_series(codes['liq'], observation_start=start_date).ffill()
-            row['Z-Liq'] = calculate_z_score(l.pct_change(12))
+            row['Z-Liq'] = calculate_z_score(l.pct_change(12)) or 0
             
-            # 4. PIB (Variation annuelle)
+            # 4. PIB (Trimestriel)
             g = fred.get_series(codes['gdp'], observation_start=start_date).ffill()
-            row['Z-PIB'] = calculate_z_score(g.pct_change(4))
+            # Croissance annuelle sur données trimestrielles = pct_change(4)
+            z_gdp = calculate_z_score(g.pct_change(4))
+            row['Z-PIB'] = z_gdp if z_gdp is not None else 0
             
-            # 5. Dette (Ratio Dette/PIB)
+            # 5. Dette (Trimestriel)
             d = fred.get_series(codes['debt'], observation_start=start_date).ffill()
-            row['Z-Debt'] = calculate_z_score(d)
+            z_debt = calculate_z_score(d)
+            row['Z-Debt'] = z_debt if z_debt is not None else 0
             
-            # FORMULE MACRO : (Rate*2) + (CPI*1) + (GDP*1.5) - (Liq*1) - (Debt*0.8)
+            # FORMULE FINALE : (Rate*2) + (CPI*1) + (GDP*1.5) - (Liq*1) - (Debt*0.8)
             row['Score'] = (row['Z-Rate']*2.0) + (row['Z-CPI']*1.0) + (row['Z-PIB']*1.5) - (row['Z-Liq']*1.0) - (row['Z-Debt']*0.8)
-            data_list.append(row)
+            data.append(row)
         except:
-            data_list.append(row)
-            
-    return pd.DataFrame(data_list).sort_values(by='Score', ascending=False)
+            data.append(row)
+    return pd.DataFrame(data).sort_values(by='Score', ascending=False)
 
-def fetch_price_analysis(pair):
+def fetch_price_info(pair):
     try:
         ticker = f"{pair}=X"
         df_p = yf.download(ticker, period="2y", interval="1d", progress=False)
@@ -91,15 +96,14 @@ def fetch_price_analysis(pair):
         return round(curr, 4), round(z, 2)
     except: return 0, 0
 
-# --- INTERFACE ---
+# --- UI ---
 st.title("🏛️ Institutional Macro Terminal Pro")
-st.markdown(f"**Analyse Fondamentale G10** | Mise à jour : {datetime.now().strftime('%d %B %Y')}")
+st.info("Données synchronisées : Banques Centrales + OCDE + BRI (Dette Mondiale)")
 
-with st.spinner("Analyse des cycles en cours..."):
-    df = fetch_macro_universe()
+df = fetch_macro_data()
 
 if not df.empty:
-    # Tableau Ledger
+    # 1. LEDGER
     st.header("1. Fundamental Health Ledger")
     st.dataframe(
         df.style.map(lambda x: 'color: #238636; font-weight: bold' if isinstance(x, float) and x > 1.2 else ('color: #da3633; font-weight: bold' if isinstance(x, float) and x < -1.2 else ''), 
@@ -108,9 +112,10 @@ if not df.empty:
         use_container_width=True
     )
 
-    # Opportunités
+    # 2. OPPORTUNITÉS
     st.divider()
-    st.header("2. Tactical Opportunities")
+    st.header("2. Tactical Analysis (Macro Divergence)")
+    
     col1, col2 = st.columns(2)
     hawks = df.iloc[:2]
     doves = df.iloc[-2:]
@@ -119,7 +124,7 @@ if not df.empty:
     for _, h in hawks.iterrows():
         for _, d in doves.iterrows():
             spread = h['Score'] - d['Score']
-            price, z_price = fetch_price_analysis(f"{h['Symbol']}{d['Symbol']}")
+            price, z_price = fetch_price_info(f"{h['Symbol']}{d['Symbol']}")
             with (col1 if idx % 2 == 0 else col2):
                 st.markdown(f"""
                 <div class="opp-card">
@@ -130,19 +135,19 @@ if not df.empty:
                     <div style="display: flex; gap: 25px; margin-top: 10px;">
                         <div><span style="color:#8b949e; font-size:0.8em;">Prix</span><br><b>{price}</b></div>
                         <div><span style="color:#8b949e; font-size:0.8em;">Z-Price</span><br><b style="color:{'#238636' if z_price < 0 else '#da3633'}">{z_price}</b></div>
-                        <div><span style="color:#8b949e; font-size:0.8em;">Diff PIB</span><br><b>{h['Z-PIB'] - d['Z-PIB']:.2f}</b></div>
+                        <div><span style="color:#8b949e; font-size:0.8em;">Santé (PIB-Dette)</span><br><b>{h['Z-PIB'] - h['Z-Debt']:.2f}</b></div>
                     </div>
                     <div class="logic-box">
-                        <b>THÈSE :</b> Achat de {h['Symbol']} supporté par une croissance robuste (Z-PIB: {h['Z-PIB']:.2f}) 
-                        contre {d['Symbol']} pénalisé par {'un risque fiscal élevé' if d['Z-Debt'] > 1 else 'une économie stagnante'}.
+                        <b>ANALYSE :</b> Achat de {h['Symbol']} supporté par une santé relative supérieure de {((h['Z-PIB']-h['Z-Debt']) - (d['Z-PIB']-d['Z-Debt'])):.2f} points de Z-score 
+                        par rapport à {d['Symbol']}.
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
             idx += 1
 
-    # Graphiques
+    # 3. GRAPHIQUES
     st.divider()
-    st.header("3. Strategic Landscapes")
+    st.header("3. Economic Landscapes")
     g1, g2 = st.columns(2)
     with g1:
         st.subheader("Monétaire (Taux vs Inflation)")
@@ -150,3 +155,5 @@ if not df.empty:
     with g2:
         st.subheader("Structurel (PIB vs Dette)")
         st.plotly_chart(px.scatter(df, x="Z-Debt", y="Z-PIB", text="Symbol", size=[20]*len(df), color="Score", color_continuous_scale='RdYlGn', template='plotly_dark').add_hline(y=0).add_vline(x=0), use_container_width=True)
+
+st.caption("Données : FRED, BRI, OCDE. Les scores reflètent la position statistique relative à 15 ans d'historique.")
